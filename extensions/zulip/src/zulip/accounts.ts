@@ -97,6 +97,8 @@ export function resolveZulipAccount(params: {
   const zulipSection = resolveZulipSection(params.cfg);
   const baseEnabled = zulipSection?.enabled !== false;
   const merged = mergeZulipAccountConfig(params.cfg, accountId);
+  const accountConfig = resolveAccountConfig(params.cfg, accountId) ?? {};
+  const baseConfig = (zulipSection ?? {}) as ZulipConfig;
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 
@@ -104,17 +106,32 @@ export function resolveZulipAccount(params: {
   const envApiKey = allowEnv ? process.env.ZULIP_API_KEY?.trim() : undefined;
   const envEmail = allowEnv ? process.env.ZULIP_EMAIL?.trim() : undefined;
   const envUrl = allowEnv ? process.env.ZULIP_URL?.trim() : undefined;
+  const envSite = allowEnv ? process.env.ZULIP_SITE?.trim() : undefined;
+  const envRealm = allowEnv ? process.env.ZULIP_REALM?.trim() : undefined;
   const configApiKey = merged.apiKey?.trim();
   const configEmail = merged.email?.trim();
-  const configUrl = merged.url?.trim();
+  // Resolve URL aliases with explicit account-first precedence.
+  // This ensures an account-level site/realm can override a base-level url.
+  const configUrl = (
+    accountConfig.url ??
+    accountConfig.site ??
+    accountConfig.realm ??
+    baseConfig.url ??
+    baseConfig.site ??
+    baseConfig.realm
+  )?.trim();
   const apiKey = configApiKey || envApiKey;
   const email = configEmail || envEmail;
-  const baseUrl = normalizeZulipBaseUrl(configUrl || envUrl);
+  const baseUrl = normalizeZulipBaseUrl(configUrl || envUrl || envSite || envRealm);
   const requireMention = resolveZulipRequireMention(merged);
 
   const apiKeySource: ZulipTokenSource = configApiKey ? "config" : envApiKey ? "env" : "none";
   const emailSource: ZulipEmailSource = configEmail ? "config" : envEmail ? "env" : "none";
-  const baseUrlSource: ZulipBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";
+  const baseUrlSource: ZulipBaseUrlSource = configUrl
+    ? "config"
+    : envUrl || envSite || envRealm
+      ? "env"
+      : "none";
 
   return {
     accountId,

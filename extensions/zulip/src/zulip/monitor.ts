@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk";
 import {
   createReplyPrefixOptions,
+  createScopedPairingAccess,
   createTypingCallbacks,
   logInboundDrop,
   logTypingFailure,
@@ -267,6 +268,12 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
   const reactionSuccess = normalizeZulipEmojiName(reactionConfig.onSuccess ?? "check_mark");
   const reactionError = normalizeZulipEmojiName(reactionConfig.onError ?? "warning");
 
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "zulip",
+    accountId: account.accountId,
+  });
+
   const handleMessage = async (message: ZulipMessage) => {
     const messageId = String(message.id ?? "");
     if (!messageId) {
@@ -352,9 +359,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
     const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
     const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
-    const storeAllowFrom = normalizeAllowList(
-      await core.channel.pairing.readAllowFromStore("zulip").catch(() => []),
-    );
+    const storeAllowFrom = normalizeAllowList(await pairing.readAllowFromStore().catch(() => []));
     const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
     const effectiveGroupAllowFrom = Array.from(
       new Set([
@@ -404,8 +409,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       }
       if (dmPolicy !== "open" && !senderAllowedForCommands) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "zulip",
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderId,
             meta: { name: senderName },
           });
@@ -510,8 +514,8 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       accountId: account.accountId,
       teamId: undefined,
       peer: {
-        kind,
-        id: kind === "dm" ? senderId : channelId,
+        kind: chatType,
+        id: isDM ? senderId : channelId,
       },
     });
 

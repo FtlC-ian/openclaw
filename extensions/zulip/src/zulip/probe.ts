@@ -1,3 +1,4 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { normalizeZulipBaseUrl, readZulipError, type ZulipUser } from "./client.js";
 
 export type ZulipProbe = {
@@ -22,35 +23,42 @@ export async function probeZulip(
 
   try {
     const authHeader = Buffer.from(`${email}:${apiKey}`).toString("base64");
-    const res = await fetch(`${normalized}/api/v1/users/me`, {
-      headers: {
-        Authorization: `Basic ${authHeader}`,
+    const { response: res, release } = await fetchWithSsrFGuard({
+      url: `${normalized}/api/v1/users/me`,
+      init: {
+        headers: {
+          Authorization: `Basic ${authHeader}`,
+        },
+        signal: controller.signal,
       },
-      signal: controller.signal,
     });
-    if (!res.ok) {
-      const detail = await readZulipError(res);
-      return { ok: false, error: detail || res.statusText };
+    try {
+      if (!res.ok) {
+        const detail = await readZulipError(res);
+        return { ok: false, error: detail || res.statusText };
+      }
+      const data = (await res.json()) as {
+        result?: string;
+        msg?: string;
+        user_id?: number;
+        email?: string;
+        full_name?: string;
+      };
+      if (data.result && data.result !== "success") {
+        return { ok: false, error: data.msg || "Zulip API error" };
+      }
+      return {
+        ok: true,
+        baseUrl: normalized,
+        bot: {
+          id: String(data.user_id ?? ""),
+          email: data.email ?? null,
+          full_name: data.full_name ?? null,
+        },
+      };
+    } finally {
+      await release();
     }
-    const data = (await res.json()) as {
-      result?: string;
-      msg?: string;
-      user_id?: number;
-      email?: string;
-      full_name?: string;
-    };
-    if (data.result && data.result !== "success") {
-      return { ok: false, error: data.msg || "Zulip API error" };
-    }
-    return {
-      ok: true,
-      baseUrl: normalized,
-      bot: {
-        id: String(data.user_id ?? ""),
-        email: data.email ?? null,
-        full_name: data.full_name ?? null,
-      },
-    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 
 export function normalizeZulipEmojiName(raw?: string | null): string {
   const trimmed = raw?.trim() ?? "";
@@ -68,26 +69,33 @@ export async function downloadZulipUpload(
   if (target.origin !== baseOrigin || !target.pathname.includes("/user_uploads/")) {
     throw new Error("Refusing to download Zulip upload from non-Zulip origin");
   }
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Basic ${authHeader}`,
+  const { response: res, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      headers: {
+        Authorization: `Basic ${authHeader}`,
+      },
     },
   });
-  if (!res.ok) {
-    throw new Error(`Zulip upload download failed: ${res.status} ${res.statusText}`);
-  }
-  const contentLength = res.headers.get("content-length");
-  if (contentLength) {
-    const length = Number(contentLength);
-    if (!Number.isNaN(length) && length > maxBytes) {
-      throw new Error(`Zulip upload exceeds max size (${length} > ${maxBytes})`);
+  try {
+    if (!res.ok) {
+      throw new Error(`Zulip upload download failed: ${res.status} ${res.statusText}`);
     }
+    const contentLength = res.headers.get("content-length");
+    if (contentLength) {
+      const length = Number(contentLength);
+      if (!Number.isNaN(length) && length > maxBytes) {
+        throw new Error(`Zulip upload exceeds max size (${length} > ${maxBytes})`);
+      }
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > maxBytes) {
+      throw new Error(`Zulip upload exceeds max size (${buffer.length} > ${maxBytes})`);
+    }
+    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+    const filename = resolveFilename(url, res.headers.get("content-disposition"));
+    return { buffer, contentType, filename };
+  } finally {
+    await release();
   }
-  const buffer = Buffer.from(await res.arrayBuffer());
-  if (buffer.length > maxBytes) {
-    throw new Error(`Zulip upload exceeds max size (${buffer.length} > ${maxBytes})`);
-  }
-  const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-  const filename = resolveFilename(url, res.headers.get("content-disposition"));
-  return { buffer, contentType, filename };
 }

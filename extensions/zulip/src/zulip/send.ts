@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk";
 import { getZulipRuntime } from "../runtime.js";
 import { resolveZulipAccount } from "./accounts.js";
 import {
@@ -59,7 +59,9 @@ async function writeTempFile(
   buffer: Buffer,
   filename: string,
 ): Promise<{ filePath: string; dir: string }> {
-  const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "zulip-upload-"));
+  const dir = await fsPromises.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "zulip-upload-"),
+  );
   const filePath = path.join(dir, filename);
   await fsPromises.writeFile(filePath, buffer);
   return { filePath, dir };

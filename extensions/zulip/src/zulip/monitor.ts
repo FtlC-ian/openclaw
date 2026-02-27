@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type {
   ChannelAccountSnapshot,
@@ -19,6 +18,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveChannelMediaMaxBytes,
+  resolvePreferredOpenClawTmpDir,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getZulipRuntime } from "../runtime.js";
@@ -197,7 +197,7 @@ async function saveZulipMediaBuffer(params: {
       contentType: saved.contentType ?? contentType,
     };
   }
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "zulip-upload-"));
+  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "zulip-upload-"));
   const filePath = path.join(dir, filename);
   await fs.writeFile(filePath, buffer);
   return { path: filePath, contentType };

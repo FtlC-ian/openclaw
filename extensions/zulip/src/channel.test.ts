@@ -42,7 +42,8 @@ describe("zulipPlugin", () => {
     it("formats allowFrom entries", () => {
       const formatAllowFrom = zulipPlugin.config.formatAllowFrom;
 
-      const formatted = formatAllowFrom({
+      const formatted = formatAllowFrom?.({
+        cfg: {} as OpenClawConfig,
         allowFrom: ["@Alice", "user:USER123", "zulip:BOT999"],
       });
       expect(formatted).toEqual(["@alice", "user123", "bot999"]);

@@ -19,6 +19,8 @@ import {
   resolveControlCommandGate,
   resolveChannelMediaMaxBytes,
   resolvePreferredOpenClawTmpDir,
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getZulipRuntime } from "../runtime.js";
@@ -357,16 +359,32 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     const dmPolicy = account.config.dmPolicy ?? "pairing";
     const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
     const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-    const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-    const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
-    const storeAllowFrom = normalizeAllowList(await pairing.readAllowFromStore().catch(() => []));
-    const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
-    const effectiveGroupAllowFrom = Array.from(
-      new Set([
-        ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-        ...storeAllowFrom,
-      ]),
+    const normalizedAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
+    const normalizedGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
+    const storeAllowFrom = normalizeAllowList(
+      await readStoreAllowFromForDmPolicy({
+        provider: "zulip",
+        accountId: account.accountId,
+        dmPolicy,
+        readStore: pairing.readStoreForDmPolicy,
+      }),
     );
+    const accessDecision = resolveDmGroupAccessWithLists({
+      isGroup: !isDM,
+      dmPolicy,
+      groupPolicy,
+      allowFrom: normalizedAllowFrom,
+      groupAllowFrom: normalizedGroupAllowFrom,
+      storeAllowFrom,
+      isSenderAllowed: (allowFrom) =>
+        isSenderAllowed({
+          senderId,
+          senderName,
+          allowFrom,
+        }),
+    });
+    const effectiveAllowFrom = accessDecision.effectiveAllowFrom;
+    const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
 
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg,

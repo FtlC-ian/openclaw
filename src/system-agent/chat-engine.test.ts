@@ -23,7 +23,7 @@ import {
 import { loadSystemAgentOverview } from "./overview.js";
 
 describe("SystemAgentChatEngine facade", () => {
-  it("keeps alternate-agent turns and planners outside the requester generation", async () => {
+  it.each(["requester", "alternate"])("preserves runtime ownership for %s", async (requester) => {
     useTempStateDir();
     const config: OpenClawConfig = {
       agents: {
@@ -44,7 +44,7 @@ describe("SystemAgentChatEngine facade", () => {
       return null;
     });
     const engine = new SystemAgentChatEngine({
-      requesterAgentId: "requester",
+      requesterAgentId: requester,
       verifiedInference: inference.binding,
       planGreeting,
       runAgentTurn: (params) =>
@@ -66,7 +66,8 @@ describe("SystemAgentChatEngine facade", () => {
       await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
         engine.planGreeting({ overview: {} as never, facts: {} as never, timeoutMs: 10 }),
       );
-      expect(observedGenerations).toEqual([undefined, undefined]);
+      const expectedGeneration = requester === "alternate" ? inheritedGeneration : undefined;
+      expect(observedGenerations).toEqual([expectedGeneration, expectedGeneration]);
     } finally {
       await engine.dispose();
     }

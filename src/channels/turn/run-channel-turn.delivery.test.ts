@@ -1,6 +1,7 @@
 // Preserve mock setup before modules that consume it.
 // oxfmt-ignore
 import { channelTurnMocks } from "./run-channel-turn.test-support.js";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -17,9 +18,14 @@ import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloa
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
+import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
+import type { ChannelPlugin } from "../plugins/types.js";
 import {
   readAgentRunTerminalOutcome,
   recordAgentRunTerminalOutcome,
@@ -61,13 +67,17 @@ const {
 } = channelTurnMocks;
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-channel-turn-delivery-" });
+const { mattermostPlugin } = await loadBundledPluginFacade<{ mattermostPlugin: ChannelPlugin }>({
+  pluginId: "mattermost",
+  artifactBasename: "channel-plugin-api.js",
+});
 let storePath: string;
 
 function runAssembled(
   overrides: Partial<
     Omit<
       Parameters<typeof dispatchAssembledChannelTurn>[0],
-      "cfg" | "agentId" | "storePath" | "recordInboundSession"
+      "agentId" | "storePath" | "recordInboundSession"
     >
   >,
 ) {
@@ -126,26 +136,86 @@ describe("channel turn delivery", () => {
   });
 
   it.each(["provider", "replacement"] as const)(
-    "delivers tool progress in the original channel owner when %s queues the reply",
+    "posts tool progress through Mattermost HTTP in the original channel owner when %s queues the reply",
     async (sender) => {
       const channel = new PluginInstance("mattermost");
       const provider = new PluginInstance(sender === "provider" ? "provider" : "mattermost");
-      const runtime = createPluginRuntimeStore<string>({
+      const runtime = createPluginRuntimeStore<PluginRuntime>({
         pluginId: "mattermost",
         errorMessage: "Mattermost runtime not initialized",
       });
-      const delivered: string[] = [];
+      const originalRuntime = createPluginRuntimeMock();
+      const replacementRuntime = createPluginRuntimeMock();
+      const requests: Array<{
+        method: string | undefined;
+        path: string | undefined;
+        body: unknown;
+      }> = [];
+      const channelId = "cccccccccccccccccccccccccc";
+      const postId = "pppppppppppppppppppppppppp";
+      const server = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer((request, response) => {
+            const chunks: Buffer[] = [];
+            request.on("data", (chunk: Buffer) => chunks.push(chunk));
+            request.on("end", () => {
+              requests.push({
+                method: request.method,
+                path: request.url,
+                body: JSON.parse(Buffer.concat(chunks).toString()),
+              });
+              response.writeHead(201, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({ id: postId, channel_id: channelId, message: "tool progress" }),
+              );
+            });
+          }),
+      });
+      const cfg = {
+        channels: {
+          mattermost: {
+            baseUrl: `http://127.0.0.1:${server.claim.port}`,
+            botToken: "synthetic-channel-reply-owner",
+            network: { dangerouslyAllowPrivateNetwork: true },
+          },
+        },
+      };
       const onError = vi.fn();
-      channel.run(() => runtime.setRuntime("channel-runtime"));
+      channel.run(() => runtime.setRuntime(originalRuntime));
       if (sender === "replacement") {
-        provider.run(() => runtime.setRuntime("replacement-runtime"));
+        provider.run(() => runtime.setRuntime(replacementRuntime));
       }
       try {
+        const sendText = mattermostPlugin.outbound?.sendText;
+        if (!sendText) {
+          throw new Error("Mattermost text transport is unavailable");
+        }
+        const acceptedPostIds: string[] = [];
         await channel.run(() =>
           runAssembled({
+            cfg,
+            channel: "mattermost",
+            routeSessionKey: `agent:main:mattermost:channel:${channelId}`,
+            ctxPayload: createCtx({
+              Surface: "mattermost",
+              To: channelId,
+              OriginatingTo: channelId,
+            }),
             delivery: {
-              deliver: async () => {
-                delivered.push(runtime.getRuntime());
+              deliver: async (payload) => {
+                const result = await sendText({
+                  cfg,
+                  to: `channel:${channelId}`,
+                  text: payload.text ?? "",
+                  accountId: "default",
+                });
+                acceptedPostIds.push(result.messageId);
+                return {
+                  visibleReplySent: true,
+                  messageIds: [result.messageId],
+                  receipt: result.receipt,
+                };
               },
               onError,
             },
@@ -163,10 +233,22 @@ describe("channel turn delivery", () => {
           }),
         );
         expect(onError).not.toHaveBeenCalled();
-        expect(delivered).toEqual(["channel-runtime"]);
+        expect(requests).toEqual([
+          {
+            method: "POST",
+            path: "/api/v4/posts",
+            body: { channel_id: channelId, message: "tool progress" },
+          },
+        ]);
+        expect(acceptedPostIds).toEqual([postId]);
+        expect(originalRuntime.channel.activity.record).toHaveBeenCalledOnce();
+        expect(replacementRuntime.channel.activity.record).not.toHaveBeenCalled();
       } finally {
         await channel.dispose();
         await provider.dispose();
+        server.listener.closeAllConnections();
+        await server.releaseListener();
+        await server.claim.release();
       }
     },
   );

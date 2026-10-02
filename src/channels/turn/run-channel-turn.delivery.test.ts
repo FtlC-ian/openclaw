@@ -11,10 +11,13 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import {
@@ -120,6 +123,83 @@ describe("channel turn delivery", () => {
   afterEach(() => {
     setLoggerOverride(null);
     resetLogger();
+  });
+
+  it.each(["provider", "replacement"] as const)(
+    "delivers tool progress in the original channel owner when %s queues the reply",
+    async (sender) => {
+      const channel = new PluginInstance("mattermost");
+      const provider = new PluginInstance(sender === "provider" ? "provider" : "mattermost");
+      const runtime = createPluginRuntimeStore<string>({
+        pluginId: "mattermost",
+        errorMessage: "Mattermost runtime not initialized",
+      });
+      const delivered: string[] = [];
+      const onError = vi.fn();
+      channel.run(() => runtime.setRuntime("channel-runtime"));
+      if (sender === "replacement") {
+        provider.run(() => runtime.setRuntime("replacement-runtime"));
+      }
+      try {
+        await channel.run(() =>
+          runAssembled({
+            delivery: {
+              deliver: async () => {
+                delivered.push(runtime.getRuntime());
+              },
+              onError,
+            },
+            dispatchReplyWithBufferedBlockDispatcher: async (params) => {
+              const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+              provider.run(() => dispatcher.sendToolResult({ text: "tool progress" }));
+              dispatcher.markComplete();
+              const settledReceipt = (await dispatcher.waitForIdle()) || undefined;
+              return {
+                queuedFinal: false,
+                counts: { tool: 1, block: 0, final: 0 },
+                settledReceipt,
+              };
+            },
+          }),
+        );
+        expect(onError).not.toHaveBeenCalled();
+        expect(delivered).toEqual(["channel-runtime"]);
+      } finally {
+        await channel.dispose();
+        await provider.dispose();
+      }
+    },
+  );
+
+  it("rejects retained delivery after its channel instance is retired", async () => {
+    const channel = new PluginInstance("mattermost");
+    const replacement = new PluginInstance("mattermost");
+    const deliver = vi.fn(async () => {});
+    let retainedDelivery:
+      | Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]["dispatcherOptions"]["deliver"]
+      | undefined;
+    try {
+      await channel.run(() =>
+        runAssembled({
+          delivery: { deliver },
+          dispatchReplyWithBufferedBlockDispatcher: async (params) => {
+            retainedDelivery = params.dispatcherOptions.deliver;
+            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+          },
+        }),
+      );
+      await channel.dispose();
+      if (!retainedDelivery) {
+        throw new Error("delivery was not retained");
+      }
+      await expect(
+        replacement.run(() => retainedDelivery!({ text: "late tool" }, { kind: "tool" })),
+      ).rejects.toThrow("Plugin mattermost was reloaded or disabled");
+      expect(deliver).not.toHaveBeenCalled();
+    } finally {
+      await channel.dispose();
+      await replacement.dispose();
+    }
   });
 
   it("preserves prepared payload custody and literals through preparation and message hooks", async () => {

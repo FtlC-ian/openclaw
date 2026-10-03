@@ -25,6 +25,10 @@ import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-r
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
+  resolveInitiatingReplyOperationForSessionId,
+  type ReplyOperation,
+} from "../auto-reply/reply/reply-run-registry.js";
+import {
   clearSessionResetRuntimeState,
   createSessionResetCleanupGuard,
   SessionResetCleanupError,
@@ -81,8 +85,6 @@ import {
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
 } from "../sessions/session-state-events.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
@@ -104,6 +106,7 @@ import {
   closeChildAcpRuntimesForParent,
 } from "./session-reset-acp.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
+import { watchSessionResetMcpRetirement } from "./session-reset-mcp-retirement.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { resolveSessionResetTarget, resolveLifecycleAgentId } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
@@ -141,27 +144,6 @@ async function resetSessionAgentHarnesses(params: {
   );
   params.assertCurrent?.();
 }
-
-type McpRunEndWatcherState = {
-  cancellations: Map<string, () => void>;
-  retirements: Set<Promise<void>>;
-  watchers: Map<string, Promise<void>>;
-};
-
-const mcpRunEndWatcherState = resolveGlobalSingleton<McpRunEndWatcherState>(
-  Symbol.for("openclaw.mcpRunEndWatchers"),
-  () => ({ cancellations: new Map(), retirements: new Set(), watchers: new Map() }),
-  async (state) => {
-    for (const cancel of state.cancellations.values()) {
-      cancel();
-    }
-    await Promise.allSettled([...state.watchers.values(), ...state.retirements]);
-    state.cancellations.clear();
-    state.retirements.clear();
-    state.watchers.clear();
-  },
-);
-const mcpRunEndWatchers = mcpRunEndWatcherState.watchers;
 
 export { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook };
 
@@ -204,6 +186,7 @@ async function ensureSessionRuntimeCleanup(params: {
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
   sessionLifecycleRevision?: string;
+  preserveReplyRun?: ReplyOperation;
   assertCurrent?: () => void;
 }) {
   const assertCurrent = createSessionResetCleanupGuard({
@@ -264,6 +247,7 @@ async function ensureSessionRuntimeCleanup(params: {
   clearFinishedSessionsForScopes([...queueKeys, params.key]);
   clearSessionResetRuntimeState(queueKeys, {
     activeReplySessionId: params.sessionId,
+    preserveReplyRun: params.preserveReplyRun,
     agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
     sessionKey: params.target.canonicalKey,
     assertCurrent,
@@ -300,62 +284,32 @@ async function ensureSessionRuntimeCleanup(params: {
   };
   // Register against the run being stopped before abort or any await allows a
   // later embedded or reply-backed run to replace it in the active registry.
-  const mcpRetirementWatcher = getOrCreatePromise(
-    mcpRunEndWatchers,
+  const mcpRetirementWatcher = watchSessionResetMcpRetirement({
     sessionId,
-    async () => {
-      let cancelWatcher = () => {};
-      const cancelled = new Promise<false>((resolve) => {
-        cancelWatcher = () => resolve(false);
-      });
-      mcpRunEndWatcherState.cancellations.set(sessionId, cancelWatcher);
-      try {
-        while (
-          await Promise.race([embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null), cancelled])
-        ) {
-          // A replacement can register after the wait promise settles but before
-          // this continuation runs. Keep the required retirement armed for it.
-          if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
-            continue;
-          }
-          const retirement = retireMcpRuntime(false);
-          mcpRunEndWatcherState.retirements.add(retirement);
-          try {
-            await retirement;
-          } finally {
-            mcpRunEndWatcherState.retirements.delete(retirement);
-          }
-          if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
-            continue;
-          }
-          cleanupProviderResources();
-          return;
-        }
-      } catch (error) {
-        logVerbose(`sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`);
-      } finally {
-        if (mcpRunEndWatcherState.cancellations.get(sessionId) === cancelWatcher) {
-          mcpRunEndWatcherState.cancellations.delete(sessionId);
-        }
-      }
-    },
-    { evictOnSettled: true },
-  );
-  embeddedAgent.abortEmbeddedAgentRun(sessionId);
+    embeddedAgent,
+    retireMcpRuntime,
+    cleanupProviderResources,
+  });
+  embeddedAgent.abortEmbeddedAgentRun(sessionId, { preserveReplyRun: params.preserveReplyRun });
   // Mark cleanup before waiting so the timeout path cannot strand MCP children.
   // Active tool/app leases keep in-flight work alive until their final release.
   await retireMcpRuntime(true);
-  const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+  const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(
+    sessionId,
+    15_000,
+    params.preserveReplyRun,
+  );
   assertCurrent();
   // A stopping run can create or reuse its runtime while we wait. Retire again
   // after a clean stop; otherwise keep the required marker armed for late work.
   await retireMcpRuntime(!ended);
   assertCurrent();
   clearBootstrapSnapshot(params.target.canonicalKey);
-  if (ended && !embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+  if (ended && !embeddedAgent.isEmbeddedAgentRunActive(sessionId, params.preserveReplyRun)) {
     assertCurrent();
-    mcpRunEndWatcherState.cancellations.get(sessionId)?.();
-    await mcpRetirementWatcher;
+    if (!embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
+      await mcpRetirementWatcher.cancel();
+    }
     assertCurrent();
     cleanupProviderResources();
     await closeTrackedBrowserTabs();
@@ -884,6 +838,9 @@ export async function performGatewaySessionReset(params: {
         target,
         sessionId: entry?.sessionId,
         sessionLifecycleRevision: resetLifecycleRevision,
+        preserveReplyRun: entry?.sessionId
+          ? resolveInitiatingReplyOperationForSessionId(entry.sessionId)
+          : undefined,
       });
       if (runtimeCleanupError) {
         return { ok: false, error: runtimeCleanupError };

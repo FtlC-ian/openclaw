@@ -20,7 +20,10 @@ import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createRuntimeChannel } from "../../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
@@ -80,8 +83,9 @@ function runAssembled(
       "agentId" | "storePath" | "recordInboundSession"
     >
   >,
+  dispatch = dispatchAssembledChannelTurn,
 ) {
-  return dispatchAssembledChannelTurn({
+  return dispatch({
     cfg: {},
     agentId: "main",
     storePath,
@@ -253,36 +257,57 @@ describe("channel turn delivery", () => {
     },
   );
 
-  it("rejects retained delivery after its channel instance is retired", async () => {
-    const channel = new PluginInstance("mattermost");
-    const replacement = new PluginInstance("mattermost");
-    const deliver = vi.fn(async () => {});
-    let retainedDelivery:
-      | Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]["dispatcherOptions"]["deliver"]
-      | undefined;
-    try {
-      await channel.run(() =>
-        runAssembled({
-          delivery: { deliver },
-          dispatchReplyWithBufferedBlockDispatcher: async (params) => {
-            retainedDelivery = params.dispatcherOptions.deliver;
-            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-          },
-        }),
-      );
-      await channel.dispose();
-      if (!retainedDelivery) {
-        throw new Error("delivery was not retained");
+  it.each(["direct", "retained-facade"] as const)(
+    "rejects stale delivery from %s",
+    async (entry) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "mattermost" });
+      registry.plugins.push(record);
+      const channel = new PluginInstance("mattermost", { record, registry });
+      const replacement = new PluginInstance("mattermost");
+      const deliver = vi.fn(async () => {});
+      let retainedDelivery:
+        | Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]["dispatcherOptions"]["deliver"]
+        | undefined;
+      try {
+        await channel.run(() =>
+          runAssembled(
+            {
+              delivery: { deliver },
+              dispatchReplyWithBufferedBlockDispatcher: async (params) => {
+                retainedDelivery = params.dispatcherOptions.deliver;
+                return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+              },
+            },
+            entry === "direct"
+              ? dispatchAssembledChannelTurn
+              : createRuntimeChannel().inbound.dispatchReply,
+          ),
+        );
+        if (!retainedDelivery) {
+          throw new Error("delivery was not retained");
+        }
+        expect(channel.hasRetainedConsumers).toBe(false);
+        if (entry === "retained-facade") {
+          await expect(
+            replacement.run(() => retainedDelivery!({ text: "late tool" }, { kind: "tool" })),
+          ).rejects.toThrow("Plugin mattermost consumer is closed");
+        }
+        await channel.dispose();
+        await expect(
+          replacement.run(() => retainedDelivery!({ text: "late tool" }, { kind: "tool" })),
+        ).rejects.toThrow(
+          entry === "direct"
+            ? "Plugin mattermost was reloaded or disabled"
+            : "Plugin mattermost consumer is closed",
+        );
+        expect(deliver).not.toHaveBeenCalled();
+      } finally {
+        await channel.dispose();
+        await replacement.dispose();
       }
-      await expect(
-        replacement.run(() => retainedDelivery!({ text: "late tool" }, { kind: "tool" })),
-      ).rejects.toThrow("Plugin mattermost was reloaded or disabled");
-      expect(deliver).not.toHaveBeenCalled();
-    } finally {
-      await channel.dispose();
-      await replacement.dispose();
-    }
-  });
+    },
+  );
 
   it("preserves prepared payload custody and literals through preparation and message hooks", async () => {
     const order: string[] = [];

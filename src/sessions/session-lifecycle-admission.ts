@@ -62,6 +62,19 @@ export {
 } from "./session-work-admission-interruption.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
+
+/** Exact live lease running in this async context, not another owner of the session. */
+export function isCurrentSessionWorkAdmission(lease: SessionWorkAdmissionLease): boolean {
+  return (
+    lease.isActive() &&
+    [...(CURRENT_SESSION_WORK_ADMISSIONS.getStore() ?? [])].some(
+      (admission) =>
+        admission.released === lease.released &&
+        admission.phase === "acquired" &&
+        admission.lifecycleGeneration === getAgentRunLifecycleGeneration(),
+    )
+  );
+}
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   agent?: AgentWorkAdmissionIdentity;
   run?: SessionWorkRun;

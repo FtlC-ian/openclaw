@@ -8,6 +8,7 @@ import {
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.registry.js";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import {
@@ -19,8 +20,8 @@ import {
   type EmbeddedRunWaiter,
 } from "./run-state.js";
 
-export function isEmbeddedAgentRunActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
+export function isEmbeddedAgentRunActive(sessionId: string, preserveReplyRun?: ReplyOperation): boolean {
+  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId, preserveReplyRun);
   if (active) {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
@@ -77,11 +78,12 @@ export function waitForCurrentEmbeddedAgentRunEnd(
   timeoutMs: number | null,
   handle?: EmbeddedAgentQueueHandle,
   signal?: AbortSignal,
+  preserveReplyRun?: ReplyOperation,
 ): Promise<boolean> {
   const isHandleActive = () =>
     handle ? ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle : ACTIVE_EMBEDDED_RUNS.has(sessionId);
   if (!isHandleActive()) {
-    return handle ? Promise.resolve(true) : waitForReplyRunEndBySessionId(sessionId, timeoutMs);
+    return handle ? Promise.resolve(true) : waitForReplyRunEndBySessionId(sessionId, timeoutMs, preserveReplyRun);
   }
   const timeoutLabel = timeoutMs === null ? "none" : String(timeoutMs);
   diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutLabel}`);
@@ -128,16 +130,17 @@ export function waitForCurrentEmbeddedAgentRunEnd(
 export async function waitForEmbeddedAgentRunEnd(
   sessionId: string,
   timeoutMs: number | null = 15_000,
+  preserveReplyRun?: ReplyOperation,
 ): Promise<boolean> {
   if (!sessionId) {
     return true;
   }
   const deadline = timeoutMs === null ? undefined : Date.now() + timeoutMs;
-  while (isEmbeddedAgentRunActive(sessionId)) {
+  while (isEmbeddedAgentRunActive(sessionId, preserveReplyRun)) {
     const remainingMs = deadline === undefined ? null : deadline - Date.now();
     if (
       (remainingMs !== null && remainingMs <= 0) ||
-      !(await waitForCurrentEmbeddedAgentRunEnd(sessionId, remainingMs))
+      !(await waitForCurrentEmbeddedAgentRunEnd(sessionId, remainingMs, undefined, undefined, preserveReplyRun))
     ) {
       return false;
     }

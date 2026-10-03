@@ -17,6 +17,7 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
 import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
+import { resolveInitiatingReplyOperationForSessionId } from "../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   isRestartRecoveryTombstone,
@@ -558,6 +559,9 @@ async function performPreparedGatewaySessionReset({
         target,
         sessionId: entry?.sessionId,
         sessionLifecycleRevision: resetLifecycleRevision,
+        preserveReplyRun: entry?.sessionId
+          ? resolveInitiatingReplyOperationForSessionId(entry.sessionId)
+          : undefined,
       });
       if (runtimeCleanupError) {
         return { ok: false, error: runtimeCleanupError };

@@ -80,10 +80,7 @@ import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type * as SessionLifecycle from "./session-create-service.types.js";
 import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
-import {
-  emitSessionUnboundLifecycleEvent,
-  resetSessionAgentHarnesses,
-} from "./session-lifecycle-cleanup.js";
+import { resetSessionAgentHarnesses } from "./session-lifecycle-cleanup.js";
 import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
@@ -104,6 +101,7 @@ import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
 import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
+import { emitSessionUnboundLifecycleEvent } from "./session-unbound-lifecycle.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -115,10 +113,7 @@ import {
 
 export { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook };
 
-export {
-  cleanupSessionBeforeMutation,
-  emitSessionUnboundLifecycleEvent,
-} from "./session-lifecycle-cleanup.js";
+export { cleanupSessionBeforeMutation } from "./session-lifecycle-cleanup.js";
 
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
@@ -1000,7 +995,12 @@ async function performPreparedGatewaySessionReset({
               });
             },
           );
-          if (hadExistingEntry) {
+          // Captured ACP metadata is rebound to this committed logical target below.
+          // Its runtime generation ended, not its conversation binding ownership.
+          if (
+            hadExistingEntry &&
+            (!deferredAcpResetState || isSubagentSessionKey(target.canonicalKey))
+          ) {
             postCommitActions.push(() =>
               emitSessionUnboundLifecycleEvent({
                 targetSessionKey: target.canonicalKey,

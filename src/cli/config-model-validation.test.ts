@@ -377,6 +377,103 @@ describe("config model validation", () => {
       },
     });
   });
+
+  it("accepts ACP harness primaries while validating their native fallbacks", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: { model: { primary: "provider-a/default" } },
+          entries: {
+            qursor: {
+              runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } },
+              model: { primary: "composer-2.5", fallbacks: ["provider-b/backup"] },
+            },
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: { model: { primary: "provider-a/default" } },
+          entries: {
+            qursor: { runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } } },
+          },
+        },
+      },
+      touchedPaths: [["agents", "entries", "qursor", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
+      "agents.entries.qursor.model.fallbacks.0",
+    ]);
+  });
+
+  it("accepts a scalar provider-shaped ACP harness primary", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          entries: {
+            qursor: {
+              runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } },
+              model: "opencode/muse-spark-1.3",
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "entries", "qursor", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("accepts an ACP harness primary on a list-shaped agent", async () => {
+    const config: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        list: [
+          {
+            id: "qursor",
+            default: true,
+            runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } },
+            model: "composer-2.5",
+          },
+        ],
+      },
+    };
+    const result = await checkTouchedTextModelRefsRaw({
+      config,
+      touchedPaths: [["agents", "list", "0", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+    expect(resolveModelRef).not.toHaveBeenCalled();
+  });
+
+  it("validates a former harness primary when its agent leaves the ACP runtime", async () => {
+    const model = { primary: "composer-2.5" };
+    const result = await checkTouchedTextModelRefs({
+      config: { agents: { entries: { qursor: { model } } } },
+      previousConfig: {
+        agents: {
+          entries: {
+            qursor: {
+              runtime: { type: "acp", acp: { agent: "qursor", backend: "acpx" } },
+              model,
+            },
+          },
+        },
+      },
+      touchedPaths: [["agents", "entries", "qursor", "runtime"]],
+      resolveModelRef: async ({ ref }) => `Unknown model: ${ref.value}`,
+    });
+
+    expect(result.errors).toEqual([
+      expect.stringContaining("at agents.entries.qursor.model.primary"),
+    ]);
+  });
 });
 
 function modelConfig(model: { primary?: string; fallbacks?: string[] }): OpenClawConfig {

@@ -4,8 +4,8 @@ import {
   listAgentEntries,
   listAgentEntriesWithSource,
   resolveAgentDir,
-  resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
+  resolveAgentNativeModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
@@ -64,6 +64,7 @@ function collectTextModelConfigRefs(params: {
   model: unknown;
   path: string;
   agentId?: string;
+  harnessPrimary?: boolean;
 }): TouchedModelRef[] {
   const stringModel = typeof params.model === "string";
   const model = stringModel ? { primary: params.model } : params.model;
@@ -72,7 +73,8 @@ function collectTextModelConfigRefs(params: {
   }
   const { primary, fallbacks } = model as { primary?: unknown; fallbacks?: unknown };
   const refs: TouchedModelRef[] = [];
-  if (typeof primary === "string") {
+  // ACP primaries select the harness model; only native fallbacks need native resolution.
+  if (typeof primary === "string" && !params.harnessPrimary) {
     const value = primary.trim();
     // Runtime preserves auth-profile suffixes for primaries, never fallback candidates.
     const authProfileId = splitTrailingAuthProfile(value).profile;
@@ -114,6 +116,7 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
         model: agent.model,
         path: `${agentPath}.model`,
         agentId,
+        harnessPrimary: agent.runtime?.type === "acp",
       }),
     );
   }
@@ -136,7 +139,7 @@ function inheritsDefaultModelRef(
 ): boolean {
   const resolveOverride = ref.fallback
     ? resolveAgentModelFallbacksOverride
-    : resolveAgentExplicitModelPrimary;
+    : resolveAgentNativeModelPrimary;
   return resolveOverride(config, agentId) === undefined;
 }
 
@@ -190,8 +193,15 @@ function collectTouchedTextModelRefs(params: {
       }
     }
     const refPath = ref.path.split(".");
+    // Leaving the ACP runtime turns a harness primary into a native one.
+    const runtimePath = ref.agentId ? [...refPath.slice(0, 3), "runtime"] : undefined;
     const touched = params.touchedPaths.some(
-      (touchedPath) => isPathPrefix(touchedPath, refPath) || isPathPrefix(refPath, touchedPath),
+      (touchedPath) =>
+        isPathPrefix(touchedPath, refPath) ||
+        isPathPrefix(refPath, touchedPath) ||
+        (runtimePath !== undefined &&
+          !ref.fallback &&
+          (isPathPrefix(touchedPath, runtimePath) || isPathPrefix(runtimePath, touchedPath))),
     );
     if (!touched || !previousRefsByIdentity) {
       return touched;

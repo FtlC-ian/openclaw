@@ -2879,10 +2879,7 @@ describe("message tool sandbox passthrough", () => {
           currentMessageId: "forged-message",
           replyToMode: "all",
         },
-        action: {
-          target: "discord:123",
-          message: "hi",
-        },
+        action: { target: "discord:123", message: "hi" },
       });
 
       if (!trusted) {
@@ -2908,11 +2905,12 @@ describe("message tool sandbox passthrough", () => {
         currentChannelProvider: "discord",
         currentChannelId: "trusted-current",
         currentChatType: "channel",
+        currentThreadTs: undefined,
+        currentMessagingTarget: undefined,
+        currentMessageId: undefined,
+        replyToMode: undefined,
+        skipCrossContextDecoration: true,
       });
-      expect(call?.toolContext?.currentThreadTs).toBeUndefined();
-      expect(call?.toolContext?.currentMessagingTarget).toBeUndefined();
-      expect(call?.toolContext?.currentMessageId).toBeUndefined();
-      expect(call?.toolContext?.replyToMode).toBeUndefined();
       expect(call?.messageActionAuthorization).toMatchObject({
         requesterAccountId: "trusted-account",
         requesterSenderId: "trusted-sender",
@@ -2921,14 +2919,6 @@ describe("message tool sandbox passthrough", () => {
           currentChannelId: "trusted-current",
           currentChatType: "channel",
         },
-      });
-      expect(call?.messageActionAuthorization?.toolContext).not.toMatchObject({
-        currentChannelId: "forged-current",
-      });
-      expect(call?.toolContext).toMatchObject({
-        currentChannelProvider: "discord",
-        currentChannelId: "trusted-current",
-        skipCrossContextDecoration: true,
       });
     },
   );

@@ -2,8 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import type { AgentWorkAdmissionIdentity } from "./session-agent-work-admission.js";
+import type {
+  HandoffSessionWorkAdmission,
+  SessionWorkAdmissionLease,
+} from "./session-work-admission-handoff.js";
 import type { SessionWorkRun } from "./session-work-admission-queries.js";
-import type { HandoffSessionWorkAdmission, SessionWorkAdmissionLease } from "./session-work-admission-handoff.js";
 
 export type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   agent?: AgentWorkAdmissionIdentity;
@@ -50,9 +53,7 @@ export function isCurrentSessionWorkAdmission(lease: SessionWorkAdmissionLease):
   return (
     lease.isActive() &&
     [...(SESSION_LIFECYCLE_ADMISSION_STATE.currentAdmissions.getStore() ?? [])].some(
-      (admission) =>
-        admission.released === lease.released &&
-        admission.phase === "acquired",
+      (admission) => admission.released === lease.released && admission.phase === "acquired",
     )
   );
 }

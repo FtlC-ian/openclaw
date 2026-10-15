@@ -8,6 +8,7 @@ import {
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
 } from "../agents/embedded-agent-runner/runs.js";
+import type { ReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import {
   clearSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
@@ -18,7 +19,6 @@ import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-clea
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
-import type { ReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { watchSessionResetMcpRetirement } from "./session-reset-mcp-retirement.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 

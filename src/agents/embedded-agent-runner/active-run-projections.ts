@@ -1,5 +1,6 @@
 // Combine active-run views without making either lifecycle owner depend on its consumers.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   getActiveReplyRunCount,
   isReplyRunActiveForSessionId,
@@ -8,11 +9,12 @@ import {
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.registry.js";
-import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
+  type ActiveEmbeddedRunSnapshot,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   EMBEDDED_RUN_WAITERS,
@@ -20,8 +22,19 @@ import {
   type EmbeddedRunWaiter,
 } from "./run-state.js";
 
-export function isEmbeddedAgentRunActive(sessionId: string, preserveReplyRun?: ReplyOperation): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId, preserveReplyRun);
+export function getActiveEmbeddedRunSnapshot(
+  sessionId: string,
+): ActiveEmbeddedRunSnapshot | undefined {
+  return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
+}
+
+export function isEmbeddedAgentRunActive(
+  sessionId: string,
+  preserveReplyRun?: ReplyOperation,
+): boolean {
+  const active =
+    ACTIVE_EMBEDDED_RUNS.has(sessionId) ||
+    isReplyRunActiveForSessionId(sessionId, preserveReplyRun);
   if (active) {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
@@ -83,7 +96,9 @@ export function waitForCurrentEmbeddedAgentRunEnd(
   const isHandleActive = () =>
     handle ? ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle : ACTIVE_EMBEDDED_RUNS.has(sessionId);
   if (!isHandleActive()) {
-    return handle ? Promise.resolve(true) : waitForReplyRunEndBySessionId(sessionId, timeoutMs, preserveReplyRun);
+    return handle
+      ? Promise.resolve(true)
+      : waitForReplyRunEndBySessionId(sessionId, timeoutMs, preserveReplyRun);
   }
   const timeoutLabel = timeoutMs === null ? "none" : String(timeoutMs);
   diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutLabel}`);
@@ -140,7 +155,13 @@ export async function waitForEmbeddedAgentRunEnd(
     const remainingMs = deadline === undefined ? null : deadline - Date.now();
     if (
       (remainingMs !== null && remainingMs <= 0) ||
-      !(await waitForCurrentEmbeddedAgentRunEnd(sessionId, remainingMs, undefined, undefined, preserveReplyRun))
+      !(await waitForCurrentEmbeddedAgentRunEnd(
+        sessionId,
+        remainingMs,
+        undefined,
+        undefined,
+        preserveReplyRun,
+      ))
     ) {
       return false;
     }

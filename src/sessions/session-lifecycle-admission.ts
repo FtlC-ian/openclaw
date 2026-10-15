@@ -13,7 +13,6 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { SESSION_LIFECYCLE_ADMISSION_STATE, type SessionWorkAdmission, type SessionLifecycleMutationOwner, type SessionLifecycleMutationKind } from "./session-lifecycle-admission.state.js";
 import { notifyListeners } from "../shared/listeners.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
@@ -22,7 +21,14 @@ import {
   interruptSessionWorkAdmissionOwners,
   matchesAgentWorkAdmission,
   sessionWorkAdmissionClosures as SESSION_WORK_ADMISSION_CLOSURES,
+  type AgentWorkAdmissionIdentity,
 } from "./session-agent-work-admission.js";
+import {
+  SESSION_LIFECYCLE_ADMISSION_STATE,
+  type SessionWorkAdmission,
+  type SessionLifecycleMutationOwner,
+  type SessionLifecycleMutationKind,
+} from "./session-lifecycle-admission.state.js";
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleMutationOperation,
@@ -42,7 +48,10 @@ import {
   waitForSessionWorkAdmissionRelease,
   type SessionWorkAdmissionInterrupt,
 } from "./session-work-admission-interruption.js";
-import { createSessionWorkAdmissionQueries } from "./session-work-admission-queries.js";
+import {
+  createSessionWorkAdmissionQueries,
+  type SessionWorkRun,
+} from "./session-work-admission-queries.js";
 
 export {
   cancelSessionWorkAdmissionHandoff,

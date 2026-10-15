@@ -1192,11 +1192,7 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
 
 export { resolveActiveEmbeddedRunHandleSessionIdBySessionFile as resolveActiveEmbeddedRunSessionIdBySessionFile };
 
-export function getActiveEmbeddedRunSnapshot(
-  sessionId: string,
-): ActiveEmbeddedRunSnapshot | undefined {
-  return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
-}
+export { getActiveEmbeddedRunSnapshot } from "./active-run-projections.js";
 
 export async function abortAndDrainEmbeddedAgentRun(params: {
   sessionId: string;
